@@ -6,6 +6,7 @@ import numpy as np
 import torchvision.transforms as transforms
 from data.dataset import SetDataset_JSON, SimpleDataset, SetDataset, EpisodicBatchSampler, SimpleDataset_JSON
 from abc import abstractmethod
+import os
 
 
 class TransformLoader:
@@ -43,6 +44,28 @@ class DataManager:
         pass
 
 
+# Helper để tạo DataLoader; trên Windows đặt num_workers=0 để tránh lỗi pickle với lambda/closure
+def make_dataloader(dataset, batch_size=None, shuffle=False, num_workers=None, pin_memory=True, batch_sampler=None):
+    if num_workers is None:
+        if os.name == 'nt':  # Windows
+            num_workers = 0
+        else:
+            try:
+                import multiprocessing
+                num_workers = min(12, max(0, multiprocessing.cpu_count() - 1))
+            except Exception:
+                num_workers = 4
+    params = {}
+    if batch_sampler is not None:
+        params['batch_sampler'] = batch_sampler
+    else:
+        params['batch_size'] = batch_size
+        params['shuffle'] = shuffle
+    params['num_workers'] = num_workers
+    params['pin_memory'] = pin_memory
+    return torch.utils.data.DataLoader(dataset, **params)
+
+
 class SimpleDataManager(DataManager):
     def __init__(self, data_path, image_size, batch_size, json_read=False):
         super(SimpleDataManager, self).__init__()
@@ -57,8 +80,8 @@ class SimpleDataManager(DataManager):
             dataset = SimpleDataset_JSON(self.data_path, data_file, transform)
         else:
             dataset = SimpleDataset(self.data_path, data_file, transform)
-        data_loader_params = dict(batch_size=self.batch_size, shuffle=True, num_workers=12, pin_memory=True)
-        data_loader = torch.utils.data.DataLoader(dataset, **data_loader_params)
+        # Dùng helper make_dataloader; num_workers mặc định sẽ về 0 nếu chạy trên Windows
+        data_loader = make_dataloader(dataset, batch_size=self.batch_size, shuffle=True, pin_memory=True)
 
         return data_loader
 
@@ -82,8 +105,8 @@ class SetDataManager(DataManager):
         else:
             dataset = SetDataset(self.data_path, data_file, self.batch_size, transform)
         sampler = EpisodicBatchSampler(len(dataset), self.n_way, self.n_episode)
-        data_loader_params = dict(batch_sampler=sampler, num_workers=12, pin_memory=True)
-        data_loader = torch.utils.data.DataLoader(dataset, **data_loader_params)
+        # Sử dụng batch_sampler (không truyền batch_size/shuffle)
+        data_loader = make_dataloader(dataset, batch_sampler=sampler, pin_memory=True)
         return data_loader
 
 

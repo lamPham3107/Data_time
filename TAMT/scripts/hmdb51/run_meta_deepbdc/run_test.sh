@@ -1,7 +1,7 @@
 gpuid=8
 N_SHOT=5
 DATA_ROOT=filelist/hmdb51-molo
-YOURPATH=/home/wyll/DeepBDCka3/checkpoints/hmdb51/112tam2 # PATH of your CKPT, e.g., Mine: /home/wyll/TAMT/checkpoints/hmdb51/VideoMAES_meta_deepbdc_5way_5shot_2TAA
+YOURPATH=G:\TLU\BigData\Data_time\TAMT\checkpoints\hmdb51 # PATH of your CKPT, e.g., Mine: /home/wyll/TAMT/checkpoints/hmdb51/VideoMAES_meta_deepbdc_5way_5shot_2TAA
 cd ../../../
 
 echo "============= meta-test best_model ============="

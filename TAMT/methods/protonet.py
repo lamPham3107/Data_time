@@ -26,6 +26,7 @@ class ProtoNet(MetaTemplate):
         return scores
 
     def set_forward_loss(self, x):
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         y_query = torch.from_numpy(np.repeat(range(self.n_way), self.n_query))
         y_query = Variable(y_query.cuda())
         y_label = np.repeat(range(self.n_way), self.n_query)
