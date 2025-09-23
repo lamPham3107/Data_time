@@ -9,11 +9,11 @@ sys.stdout.reconfigure(encoding='utf-8')
 base_dir = "g:/TLU/BigData/Data_time/TAMT/filelist/hmdb51-molo"
 
 # File gốc và file output
-json_path = os.path.join(base_dir, "val_old.json")
-output_path = os.path.join(base_dir, "val.json")
+json_path = os.path.join(base_dir, "base_old.json")
+output_path = os.path.join(base_dir, "base.json")
 
 # Prefix mới cho đường dẫn video
-new_prefix = "G:/TLU/BigData/data_down/hmdb51_org/"
+new_prefix = "/kaggle/input/tamt-bigdata/TAMT/data_down/hmdb51_org_2"
 
 # Đọc file JSON gốc
 with open(json_path, "r", encoding="utf-8") as f:
