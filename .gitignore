@@ -74,3 +74,4 @@ crashlytics-build.properties
 TAMT/pretrain.py
 TAMT/.project
 TAMT/pretrain.py
+TAMT/checkpoints/hmdb51/pretrain.pt
