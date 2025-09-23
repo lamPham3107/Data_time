@@ -84,7 +84,17 @@ class MetaDeepBDC(MetaTemplate):
 
     def set_forward(self, x, is_feature=False):
         if self.class_way == 'add':
-            z_support, z_query, support_feature, query_feature = self.parse_feature(x, is_feature)
+            ret = self.parse_feature(x, is_feature)
+            if not isinstance(ret, tuple):
+                raise ValueError("parse_feature must return a tuple")
+            if len(ret) == 4:
+                z_support, z_query, support_feature, query_feature = ret
+            elif len(ret) == 2:
+                z_support, z_query = ret
+                support_feature, query_feature = z_support, z_query
+            else:
+                raise ValueError(f"parse_feature returned unexpected number of values: {len(ret)}")
+
             z_proto = z_support.contiguous().view(self.n_way, self.n_support, -1).mean(1)
             z_query = z_query.contiguous().view(self.n_way * self.n_query, -1)
             scores1 = self.metric(z_query, z_proto)
