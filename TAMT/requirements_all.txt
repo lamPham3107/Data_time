@@ -1,9 +1,8 @@
-Package                Version
----------------------- --------------------
+
 absl-py                0.10.0
 aliyun-python-sdk-core 2.13.36
 aliyun-python-sdk-kms  2.15.0
-av                     8.0.2
+av                     
 backcall               0.2.0
 blessings              1.7
 cachetools             4.1.1

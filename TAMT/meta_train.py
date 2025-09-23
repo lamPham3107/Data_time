@@ -176,6 +176,7 @@ if __name__ == '__main__':
 
     model = model.cuda()
 
+
     # model save path
     params.checkpoint_dir = './checkpoints/%s/%s_%s' % (params.dataset, params.model, params.method)
     params.checkpoint_dir += '_%dway_%dshot' % (params.train_n_way, params.n_shot)
@@ -183,8 +184,9 @@ if __name__ == '__main__':
     params.checkpoint_dir += params.extra_dir
     print(params.checkpoint_dir)
 
+
     model = model.cuda()
-    
+
     print(params.pretrain_path)
     modelfile = os.path.join(params.pretrain_path)
     dir1 = ''

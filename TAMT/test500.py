@@ -80,6 +80,7 @@ elif params.method == 'stl_deepbdc':
     model = STLDeepBDC(params, model_dict[params.model], **novel_few_shot_params)
 
 # model save path
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model = model.cuda()
 model.eval()
 

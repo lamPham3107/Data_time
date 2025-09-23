@@ -250,6 +250,7 @@ class DropBlock(nn.Module):
         non_zero_idxs = mask.nonzero()
         nr_blocks = non_zero_idxs.shape[0]
 
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         offsets = torch.stack(
             [
                 torch.arange(self.block_size).view(-1, 1).expand(self.block_size, self.block_size).reshape(-1), # - left_padding,

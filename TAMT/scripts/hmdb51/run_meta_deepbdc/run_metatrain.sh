@@ -1,15 +1,15 @@
-gpuid=0
+gpuid= -1
 N_SHOT=5
 DATA_ROOT=filelist/hmdb51-molo
 MODEL_PATH=/hd1/wyl/model/112112vit-s-140epoch.pt     # PATH of your Pretrained MODEL
-YOURPATH=xxx/xxx/xxx  # PATH of your CKPT, e.g., Mine: /home/wyll/TAMT/checkpoints/hmdb51/VideoMAES_meta_deepbdc_5way_5shot_2TAA
+YOURPATH=G:\TLU\BigData\Data_time\TAMT\checkpoints\hmdb51  # PATH of your CKPT, e.g., Mine: /home/wyll/TAMT/checkpoints/hmdb51/VideoMAES_meta_deepbdc_5way_5shot_2TAA
 cd ../../../
 
 
 echo "============= meta-train 5-shot ============="
 
 # # train with log, 112 resolution
-# python meta_train.py --dataset hmdb51 --data_path $DATA_ROOT  --model VideoMAES --method meta_deepbdc --image_size 112 --gpu ${gpuid} --lr 1e-3  --epoch 30 --milestones 30 --n_shot $N_SHOT --train_n_episode 600 --val_n_episode 300  --reduce_dim 256 --pretrain_path $MODEL_PATH >> $YOURPATH/trainlog.txt
+python meta_train.py --dataset hmdb51 --data_path $DATA_ROOT  --model VideoMAES --method meta_deepbdc --image_size 112 --gpu ${gpuid} --lr 1e-3  --epoch 30 --milestones 30 --n_shot $N_SHOT --train_n_episode 600 --val_n_episode 300  --reduce_dim 256 --pretrain_path $MODEL_PATH >> $YOURPATH/trainlog.txt
 
 # train without log, 112 resolution
 python meta_train.py --dataset hmdb51 --data_path $DATA_ROOT  --model VideoMAES --method meta_deepbdc --image_size 112 --gpu ${gpuid} --lr 1e-3  --epoch 30 --milestones 30 --n_shot $N_SHOT --train_n_episode 600 --val_n_episode 300  --reduce_dim 256 --pretrain_path $MODEL_PATH #>> $YOURPATH/trainlog.txt
