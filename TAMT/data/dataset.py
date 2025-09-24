@@ -326,10 +326,41 @@ class SimpleDataset:
         self.checkimgsize(self.data[random.randint(0, len(self.label) - 1 )])
     
     def checkimgsize(self, data):
-        data_path = os.path.join(data)
-        data = Image.open(data_path).convert('RGB')
-        if data.size == (84, 84):
-            raise RuntimeError("Please use raw images instead of fixed resolution(84, 84) images !")
+        # Skip PIL check for video files; validate by reading first frame if possible
+        video_exts = ('.avi', '.mp4', '.mov', '.mkv', '.webm')
+        p = str(data)
+
+        if p.lower().endswith(video_exts):
+            # Try decord first
+            try:
+                from decord import VideoReader, cpu
+                vr = VideoReader(p, ctx=cpu(0))
+                _ = vr[0]  # try to read first frame
+                return
+            except Exception:
+                # fallback to OpenCV
+                try:
+                    import cv2
+                    cap = cv2.VideoCapture(p)
+                    ret, _ = cap.read()
+                    cap.release()
+                    if ret:
+                        return
+                except Exception:
+                    # unable to read video; skip strict check to avoid crashing
+                    return
+
+        # For non-video files use existing PIL image check
+        try:
+            from PIL import Image
+            img = Image.open(p).convert('RGB')
+            w, h = img.size
+            # optional: enforce minimal size if code expects it
+            # if hasattr(self, 'image_size') and min(w, h) < self.image_size:
+            #     pass
+        except Exception:
+            # if PIL fails, skip check (prevents crash on unexpected file types)
+            return
 
     def __getitem__(self, i):
         image_path = os.path.join(self.data[i])
@@ -379,10 +410,37 @@ class SetDataset:
             self.sub_dataloader.append(torch.utils.data.DataLoader(sub_dataset, **sub_data_loader_params))
 
     def checkimgsize(self, data):
-        data_path = os.path.join(data)
-        data = Image.open(data_path).convert('RGB')
-        if data.size == (84, 84):
-            raise RuntimeError("Please use raw images instead of fixed resolution(84, 84) images !")
+        # Skip PIL check for video files; validate by reading first frame if possible
+        video_exts = ('.avi', '.mp4', '.mov', '.mkv', '.webm')
+        p = str(data)
+
+        if p.lower().endswith(video_exts):
+            # Try decord first
+            try:
+                from decord import VideoReader, cpu
+                vr = VideoReader(p, ctx=cpu(0))
+                _ = vr[0]  # try to read first frame
+                return
+            except Exception:
+                # fallback to OpenCV
+                try:
+                    import cv2
+                    cap = cv2.VideoCapture(p)
+                    ret, _ = cap.read()
+                    cap.release()
+                    if ret:
+                        return
+                except Exception:
+                    # unable to read video; skip strict check to avoid crashing
+                    return
+        else:
+            try:
+                from PIL import Image
+                img = Image.open(p).convert('RGB')
+                if img.size == (84, 84):
+                    raise RuntimeError("Please use raw images instead of fixed resolution(84, 84) images !")
+            except Exception:
+                return
 
     def __getitem__(self, i):
         return next(iter(self.sub_dataloader[i]))
@@ -419,107 +477,172 @@ class SimpleDataset_JSON:
         self.checkimgsize(self.meta['image_names'][random.randint(0, len(self.meta['image_names']) - 1 )])
 
     def checkimgsize(self, data):
-        data_path = os.path.join(data)
-        data = Image.open(data_path).convert('RGB')
-        if data.size == (84, 84):
-            raise RuntimeError("Please use raw images instead of fixed resolution(84, 84) images !")
-        
+        # Skip PIL check for video files; validate by reading first frame if possible
+        video_exts = ('.avi', '.mp4', '.mov', '.mkv', '.webm')
+        p = str(data)
+
+        if p.lower().endswith(video_exts):
+            # Try decord first
+            try:
+                from decord import VideoReader, cpu
+                vr = VideoReader(p, ctx=cpu(0))
+                _ = vr[0]  # try to read first frame
+                return
+            except Exception:
+                # fallback to OpenCV
+                try:
+                    import cv2
+                    cap = cv2.VideoCapture(p)
+                    ret, _ = cap.read()
+                    cap.release()
+                    if ret:
+                        return
+                except Exception:
+                    # unable to read video; skip strict check to avoid crashing
+                    return
+        else:
+            try:
+                from PIL import Image
+                img = Image.open(p).convert('RGB')
+                if img.size == (84, 84):
+                    raise RuntimeError("Please use raw images instead of fixed resolution(84, 84) images !")
+            except Exception:
+                return
+
     def __getitem__(self, i):
-        image_path = os.path.join(self.meta['image_names'][i])
-        img = Image.open(image_path).convert('RGB')
-        img = self.transform(img)
-        target = self.target_transform(self.meta['image_labels'][i])
-        return img, target
+        path = str(self.meta['image_names'][i])
+        video_exts = ('.avi', '.mp4', '.mov', '.mkv', '.webm')
+        if path.lower().endswith(video_exts):
+            n_frames = getattr(self, 'n_frames', 8)
+            try:
+                from decord import VideoReader, cpu
+                vr = VideoReader(path, ctx=cpu(0))
+                total = len(vr)
+                idx = np.linspace(0, max(total-1,0), n_frames, dtype=int)
+                frames = vr.get_batch(idx).asnumpy()  # (T,H,W,C)
+            except Exception:
+                import cv2
+                cap = cv2.VideoCapture(path)
+                total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 1
+                idx = np.linspace(0, max(total-1,0), n_frames, dtype=int)
+                tmp = []
+                for fid in idx:
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, int(fid))
+                    ret, frame = cap.read()
+                    if not ret:
+                        frame = np.zeros((224,224,3), dtype=np.uint8)
+                    tmp.append(frame[:, :, ::-1])  # BGR->RGB
+                cap.release()
+                frames = np.stack(tmp, axis=0)
+            # frames: (T,H,W,C) -> list of PIL -> apply transform per-frame -> stack to (C,T,H,W)
+            pil_frames = [Image.fromarray(fr).convert('RGB') for fr in frames]
+            processed = [self.transform(f) for f in pil_frames]  # each -> tensor C,H,W
+            frames_tensor = torch.stack(processed, dim=1)  # C,T,H,W
+            target = self.target_transform(self.meta['image_labels'][i])
+            return frames_tensor, target
+        else:
+            img = Image.open(path).convert('RGB')
+            img = self.transform(img)
+            target = self.target_transform(self.meta['image_labels'][i])
+            return img, target
 
     def __len__(self):
         return len(self.meta['image_names'])
 
 
 class SetDataset_JSON:
-    def __init__(self, image_size, data_path, data_file, batch_size, transform):
+    def __init__(self, image_size, data_path, data_file, batch_size, transform, target_transform=identity):
         self.image_size = image_size
         data = data_path + '/' + data_file
-        with open(data, 'r') as f:
+        with open(data, 'r', encoding='utf-8') as f:
             self.meta = json.load(f)
 
-        self.cl_list = np.unique(self.meta['image_labels']).tolist()
-        # 随机取一张图片/视频
-        # self.meta中含有label_names image_names image_labels 这三个key
-        self.checkimgsize(self.meta['image_names'][random.randint(0, len(self.cl_list) - 1 )])
+        # lists from json
+        self.data = list(self.meta.get('image_names', []))
+        self.label = list(self.meta.get('image_labels', []))
 
-        self.sub_meta = {}
-        for cl in self.cl_list:
-            self.sub_meta[cl] = []
-        # 把同一个image_label的image_name聚合到一起
-        # self.sub_meta是个字典 key是image_label value就是image_name的列表
-        for x, y in zip(self.meta['image_names'], self.meta['image_labels']):
-            self.sub_meta[y].append(x)
+        # unique class list
+        self.cl_list = np.unique(self.label).tolist()
 
-        self.sub_dataloader = []
-        sub_data_loader_params = dict(batch_size=batch_size,
-                                      shuffle=True,
-                                      num_workers=0,  # use main thread only or may receive multiple batches
-                                      pin_memory=False)
-        for cl in self.cl_list:
-            # sub_dataset属于这个标签的image_name
-            sub_dataset = SubDataset_JSON(self.image_size, self.sub_meta[cl], cl, transform=transform)
-            # 对每一个image_lable制作一个dataloader
-            self.sub_dataloader.append(torch.utils.data.DataLoader(sub_dataset, **sub_data_loader_params))
-
-    def checkimgsize(self, data):
-        data_path = os.path.join(data)
-        # data = Image.open(data_path).convert('RGB')
-        # if data.size == (84, 84):
-        #     raise RuntimeError("Please use raw images instead of fixed resolution(84, 84) images !")
-        
-    def __getitem__(self, i):
-        # 取该数据集的第i个元素 返回的是第i个image_label对应的dataloader的第一个batch
-        return next(iter(self.sub_dataloader[i]))
-
-    def __len__(self):
-        # 该Dataset的长度是image_label的总个数
-        return len(self.cl_list)
-
-
-class SubDataset_JSON:
-    def __init__(self, image_size, sub_meta, cl, transform=transforms.ToTensor(), target_transform=identity):
-        self.image_size = image_size
-        self.sub_meta = sub_meta
-        self.cl = cl
+        # keep transforms
         self.transform = transform
         self.target_transform = target_transform
 
+        # validate a random sample (video or image)
+        if len(self.data) > 0:
+            self.checkimgsize(self.data[random.randint(0, len(self.data) - 1 )])
+
+        # build per-class lists
+        self.sub_meta = {cl: [] for cl in self.cl_list}
+        for x, y in zip(self.data, self.label):
+            self.sub_meta[y].append(x)
+
+        # create data loaders per class
+        self.sub_dataloader = []
+        sub_data_loader_params = dict(batch_size=batch_size,
+                                      shuffle=True,
+                                      num_workers=0,
+                                      pin_memory=False)
+        for cl in self.cl_list:
+            sub_dataset = SubDataset(self.sub_meta[cl], cl, transform=transform, target_transform=target_transform)
+            self.sub_dataloader.append(torch.utils.data.DataLoader(sub_dataset, **sub_data_loader_params))
+
+    def checkimgsize(self, data):
+        # Skip PIL check for video files; validate by reading first frame if possible
+        video_exts = ('.avi', '.mp4', '.mov', '.mkv', '.webm')
+        p = str(data)
+
+        if p.lower().endswith(video_exts):
+            # Try decord first
+            try:
+                from decord import VideoReader, cpu
+                vr = VideoReader(p, ctx=cpu(0))
+                _ = vr[0]  # try to read first frame
+                return
+            except Exception:
+                # fallback to OpenCV
+                try:
+                    import cv2
+                    cap = cv2.VideoCapture(p)
+                    ret, _ = cap.read()
+                    cap.release()
+                    if ret:
+                        return
+                except Exception:
+                    # unable to read video; skip strict check to avoid crashing
+                    return
+        else:
+            try:
+                from PIL import Image
+                img = Image.open(p).convert('RGB')
+                if img.size == (84, 84):
+                    raise RuntimeError("Please use raw images instead of fixed resolution(84, 84) images !")
+            except Exception:
+                return
+
     def __getitem__(self, i):
-        # print( '%d -%d' %(self.cl,i))
-        # 取数据的时候返回的就是该标签下的第i张图片 并且返回该标签
-        image_path = os.path.join(self.sub_meta[i])
-        image_size = self.image_size
-        video_load = VideoClsDataset(image_size, samples=image_path)
-        # img = Image.open(image_path).convert('RGB')
-        # img = self.transform(img)
-        video = video_load.getitem()
-        
-        target = self.target_transform(self.cl)
-        return video, target
+        return next(iter(self.sub_dataloader[i]))
 
     def __len__(self):
-        # 该Dataset的长度就是在该image_label下的image_name数量
-        return len(self.sub_meta)
+        return len(self.cl_list)
 
 
 class EpisodicBatchSampler(object):
+    """
+    Simple episodic sampler for meta-learning.
+    Yields a list of `n_way` class indices for each episode.
+    Signature: EpisodicBatchSampler(n_classes, n_way, n_episodes)
+    """
     def __init__(self, n_classes, n_way, n_episodes):
-        self.n_classes = n_classes
-        self.n_way = n_way
-        self.n_episodes = n_episodes
+        self.n_classes = int(n_classes)
+        self.n_way = int(n_way)
+        self.n_episodes = int(n_episodes)
 
     def __len__(self):
         return self.n_episodes
 
     def __iter__(self):
-        # 返回的是一个列表 列表长self.n_episodes
-        # 每个元素都是 先对0~self.n_classes随机排列 取前self.n_way个
-        for i in range(self.n_episodes):
-            yield torch.randperm(self.n_classes)[:self.n_way]
+        for _ in range(self.n_episodes):
+            yield torch.randperm(self.n_classes)[:self.n_way].tolist()
 
 

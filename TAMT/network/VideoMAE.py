@@ -368,14 +368,28 @@ class Block(nn.Module):
             if self.i > 9:
                 y = self.norm2(x)
 
-                if self.img_size == 224:
-                    y = y.view(B,8,int(N/112),int(N/112),C).permute(0,4,1,2,3) #224*224
-                elif self.img_size == 112:
-                    y = y.view(B,8,int(N/56),int(N/56),C).permute(0,4,1,2,3)  #112*112
+                # infer temporal segments and spatial grid from N and img_size (default patch_size=16)
+                import math
+                patch_size = 16
+                # spatial patches per frame (e.g. (112/16)^2 = 49)
+                sp_per_frame = (self.img_size // patch_size) ** 2
+                if sp_per_frame <= 0:
+                    raise RuntimeError(f"Invalid img_size {self.img_size} for patch_size {patch_size}")
+                # temporal patch count
+                t = int(N // sp_per_frame)
+                if t * sp_per_frame != N:
+                    # fallback: if N is a perfect square assume single temporal segment
+                    s = int(round(math.sqrt(N)))
+                    if s * s == N:
+                        t = 1
+                        h = s
+                    else:
+                        # final fallback: derive spatial grid from img_size
+                        h = self.img_size // patch_size
                 else:
-                    print("image_size is wrong")
-                    assert 0==1
-
+                    h = int(math.sqrt(sp_per_frame))
+                # reshape to (B, T, H, W, C) then permute to (B, C, T, H, W)
+                y = y.view(B, t, h, h, C).permute(0, 4, 1, 2, 3)
                 y = self.tam(y)
                 x = x + self.drop_path(self.mlp(self.norm2(x))) + self.drop_path2(y)
             else:
@@ -571,8 +585,40 @@ class VisionTransformer(nn.Module):
 
         x = self.patch_embed(x)
         if self.pos_embed is not None:
-            x = x + self.pos_embed.expand(B, -1, -1).type_as(x).to(
-                x.device).clone().detach()
+            B, N, C = x.shape
+            # adapt positional embedding if sizes mismatch (common when temporal length differs)
+            pe = self.pos_embed  # (1, P, C)
+            if pe.shape[1] != N:
+                import math, torch
+                # try case: pe is spatial only (H*W) and new N == T * (H*W) -> repeat spatial pe across temporal dim
+                P = pe.shape[1]
+                s = int(round(math.sqrt(P))) if P > 0 else 0
+                if s * s == P and N % P == 0:
+                    T = N // P
+                    # pe -> (1, H, W, C)
+                    pe_sp = pe.view(1, s, s, C).permute(0, 3, 1, 2)  # 1,C,H,W
+                    pe_sp = pe_sp.unsqueeze(2)  # 1,C,1,H,W
+                    pe_rep = pe_sp.repeat(1, 1, T, 1, 1)  # 1,C,T,H,W
+                    pe = pe_rep.permute(0, 2, 3, 4, 1).contiguous().view(1, N, C)
+                else:
+                    # fallback: try spatial interpolation when both are square grids (ignore temporal), else trim/repeat
+                    try:
+                        old_s = int(round(math.sqrt(P)))
+                        new_s = int(round(math.sqrt(N)))
+                        if old_s * old_s == P and new_s * new_s == N:
+                            pe_map = pe.view(1, old_s, old_s, C).permute(0, 3, 1, 2)  # 1,C,old_s,old_s
+                            pe_map = torch.nn.functional.interpolate(pe_map, size=(new_s, new_s), mode='bilinear', align_corners=False)
+                            pe = pe_map.permute(0, 2, 3, 1).contiguous().view(1, N, C)
+                        else:
+                            # last resort: repeat or trim to match N
+                            if P < N:
+                                repeats = (N + P - 1) // P
+                                pe = pe.repeat(1, repeats, 1)[:, :N, :].contiguous()
+                            else:
+                                pe = pe[:, :N, :].contiguous()
+                    except Exception:
+                        pe = pe.repeat(1, (N + P - 1) // P, 1)[:, :N, :].contiguous()
+            x = x + pe.expand(B, -1, -1).type_as(x).to(x.device)
         x = self.pos_drop(x)
 
         for blk in self.blocks:
@@ -585,12 +631,46 @@ class VisionTransformer(nn.Module):
         if self.fc_norm is not None:
 
             B,N,C=x.shape
-            y = x.view(B,8,int(N/8),C)
-            y=y.permute(0,2,3,1).reshape(B*int(N/8),C,8).contiguous()
-            # print('y',y[0])
+            # y = x.view(B,8,int(N/56),int(N/56),C).permute(0,4,1,2,3)  #112*112
+            # Thay reshape cứng bằng reshape động:
+            # B, N, C tính ở trên (N là số token không bao gồm cls nếu có)
+            temporal_pref = getattr(self, 'num_segments', None)  # nếu model khởi tạo có num_segments thì ưu tiên
+            found = None
+            # nếu biết temporal mong muốn thì thử trước
+            if temporal_pref is not None and temporal_pref > 0 and N % temporal_pref == 0:
+                s = N // temporal_pref
+                r = int(s**0.5)
+                if r * r == s:
+                    found = (temporal_pref, r)
+            # tìm mọi cặp (T, side) sao cho T*side*side == N (ưu tiên T lớn hơn)
+            if found is None:
+                candidates = []
+                for t in range(1, min(N, 64) + 1):  # giới hạn T đến 64 để nhanh
+                    if N % t != 0:
+                        continue
+                    s = N // t
+                    r = int(s**0.5)
+                    if r * r == s:
+                        candidates.append((t, r))
+                if candidates:
+                    # chọn temporal lớn nhất hợp lý (thường là nhiều frame hơn)
+                    found = max(candidates, key=lambda x: x[0])
+            if found is None:
+                # debug giúp biết vì sao fail
+                raise RuntimeError(f'Cannot reshape tokens: B={B}, N={N}, C={C}. '
+                                   f'No (T, H, W) found such that T*H*W==N with H==W. '
+                                   f'If you know temporal length, set self.num_segments accordingly.')
+            T, side = found
+            # reshape về (B, C, T, H, W)
+            y = x.view(B, T, side, side, C).permute(0,4,1,2,3).contiguous()
             y = self.temporal_conv(y)
-            # print('y',y[0])
-            y = y.reshape(B,N,C)
+            # y có shape (B, C, T, H, W) => áp dụng Conv1d dọc theo trục temporal (T)
+            B, C, T, H, W = y.shape
+            # hợp nhất không gian vào batch để Conv1d nhận input 3D: (B*H*W, C, T)
+            y = y.permute(0, 3, 4, 1, 2).contiguous().view(B * H * W, C, T)
+            y = self.temporal_conv(y)  # (B*H*W, C, T) (groups= C nếu depthwise)
+            # trả về shape ban đầu (B, C, T, H, W)
+            y = y.view(B, H, W, C, -1).permute(0, 3, 4, 1, 2).contiguous()
             return self.fc_norm((x.mean(1))), self.fc_norm2(x+y)
 
             # return self.fc_norm((x.mean(1))), self.fc_norm(x)

@@ -87,7 +87,43 @@ class BaselineTrain(nn.Module):
         if params.method in ['stl_deepbdc', 'meta_deepbdc']:
             reduce_dim = params.reduce_dim
             self.feat_dim = int(reduce_dim * (reduce_dim + 1) / 2)
-            self.dcov = BDC(is_vec=True, input_dim=self.feature.feat_dim, dimension_reduction=reduce_dim)
+            feat_dim = None
+            # try common attribute names
+            for attr in ('feat_dim', 'feat_dims', 'embed_dim', 'num_features', 'hidden_dim'):
+                if hasattr(self.feature, attr):
+                    val = getattr(self.feature, attr)
+                    if isinstance(val, int):
+                        feat_dim = val
+                        break
+                    elif isinstance(val, (tuple, list)):
+                        feat_dim = int(val[-1])
+                        break
+
+            # fallback: run a dummy forward to infer output dimension
+            if feat_dim is None:
+                import torch
+                self.feature.eval()
+                with torch.no_grad():
+                    # try 5D video input first, then 4D image input
+                    device = next(self.feature.parameters()).device if any(True for _ in self.feature.parameters()) else torch.device('cpu')
+                    H = getattr(self, 'image_size', None) or getattr(self, 'args', None) and getattr(self.args, 'image_size', None) or 224
+                    tried = False
+                    for shape in [(1, 3, 2, int(H), int(H)), (1, 3, int(H), int(H))]:
+                        try:
+                            dummy = torch.zeros(*shape, device=device)
+                            out = self.feature(dummy)
+                            # handle tuple/list outputs
+                            if isinstance(out, (tuple, list)):
+                                out = out[0]
+                            feat_dim = out.view(out.size(0), -1).size(1)
+                            tried = True
+                            break
+                        except Exception:
+                            continue
+                    if not tried:
+                        raise RuntimeError("Unable to infer feature dimension from model.feature; please set feature.feat_dim or adjust fallback shapes.")
+
+            self.dcov = BDC(is_vec=True, input_dim=feat_dim, dimension_reduction=reduce_dim)
             self.dropout = nn.Dropout(params.dropout_rate)
         elif params.method in ['protonet', 'good_embed']:
             self.feat_dim = self.feature.feat_dim[0]

@@ -94,7 +94,8 @@ def train(params, base_loader, val_loader, model, stop_epoch):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--image_size', default=84, type=int, choices=[84, 224], help='input image size, 84 for miniImagenet and tieredImagenet, 224 for cub')
+    parser.add_argument('--image_size', type=int, default=224, choices=[84, 112, 224],
+                        help='image size (add 112 for models that expect 112x112)')
     parser.add_argument('--batch_size', default=64, type=int, help='pre-training batch size')
     parser.add_argument('--lr', type=float, default=0.05, help='initial learning rate of the backbone')
     parser.add_argument('--wd', type=float, default=5e-4, help='weight decay')

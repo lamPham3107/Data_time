@@ -77,3 +77,4 @@ TAMT/pretrain.py
 TAMT/checkpoints/hmdb51/pretrain.pt
 TAMT.zip
 TAMT/data_down
+data_down.zip

@@ -15,32 +15,55 @@ import torch
 import torch.nn as nn
 
 class BDC(nn.Module):
-    def __init__(self, is_vec=True, input_dim=640, dimension_reduction=None, activate='relu'):
+    def __init__(self, is_vec=True, input_dim=None, dimension_reduction=None, activate='relu'):
         super(BDC, self).__init__()
         self.is_vec = is_vec
+        # store provided params
         self.dr = dimension_reduction
         self.activate = activate
-        self.input_dim = input_dim[0]
+
+        # accept either an int or a sequence for input_dim
+        spatial = None
+        if isinstance(input_dim, int):
+            self.input_dim = int(input_dim)
+        elif hasattr(input_dim, '__len__') and len(input_dim) > 0:
+            # input_dim can be (C,) or (C, H, W)
+            self.input_dim = int(input_dim[0])
+            if len(input_dim) >= 3:
+                try:
+                    spatial = int(input_dim[1]) * int(input_dim[2])
+                except Exception:
+                    spatial = None
+        else:
+            raise ValueError("input_dim must be an int or a non-empty sequence")
+
+        # optional reduction block
         if self.dr is not None and self.dr != self.input_dim:
-            if activate == 'relu':
+            if self.activate == 'relu':
                 self.act = nn.ReLU(inplace=True)
-            elif activate == 'leaky_relu':
+            elif self.activate == 'leaky_relu':
                 self.act = nn.LeakyReLU(0.1)
             else:
                 self.act = nn.ReLU(inplace=True)
 
             self.conv_dr_block = nn.Sequential(
-            nn.Conv2d(self.input_dim, self.dr, kernel_size=1, stride=1, bias=False),
-            nn.BatchNorm2d(self.dr),
-            self.act
+                nn.Conv2d(self.input_dim, self.dr, kernel_size=1, stride=1, bias=False),
+                nn.BatchNorm2d(self.dr),
+                self.act
             )
+
         output_dim = self.dr if self.dr else self.input_dim
         if self.is_vec:
-            self.output_dim = int(output_dim*(output_dim+1)/2)
+            self.output_dim = int(output_dim * (output_dim + 1) / 2)
         else:
-            self.output_dim = int(output_dim*output_dim)
+            self.output_dim = int(output_dim * output_dim)
 
-        self.temperature = nn.Parameter(torch.log((1. / (2 * input_dim[1]*input_dim[2])) * torch.ones(1,1)), requires_grad=True)
+        # temperature parameter: if spatial known initialize accordingly, else init log(1.0)
+        if spatial:
+            temp_init = (1.0 / (2.0 * spatial))
+            self.temperature = nn.Parameter(torch.log(torch.tensor([temp_init], dtype=torch.float32)), requires_grad=True)
+        else:
+            self.temperature = nn.Parameter(torch.tensor([0.0], dtype=torch.float32), requires_grad=True)
 
         self._init_weight()
 
