@@ -391,6 +391,8 @@ class Block(nn.Module):
                 # reshape to (B, T, H, W, C) then permute to (B, C, T, H, W)
                 y = y.view(B, t, h, h, C).permute(0, 4, 1, 2, 3)
                 y = self.tam(y)
+                # DO NOT call temporal_conv on a 5D tensor (Conv1d expects 3D input).
+                # temporal_conv sẽ được áp dụng sau khi reshape về (B*H*W, C, T).
                 x = x + self.drop_path(self.mlp(self.norm2(x))) + self.drop_path2(y)
             else:
                 x = x + self.drop_path(self.mlp(self.norm2(x)))
@@ -662,165 +664,132 @@ class VisionTransformer(nn.Module):
                                    f'If you know temporal length, set self.num_segments accordingly.')
             T, side = found
             # reshape về (B, C, T, H, W)
-            y = x.view(B, T, side, side, C).permute(0,4,1,2,3).contiguous()
-            y = self.temporal_conv(y)
-            # y có shape (B, C, T, H, W) => áp dụng Conv1d dọc theo trục temporal (T)
+            y = x.view(B, T, side, side, C).permute(0,4,1,2,3).contiguous()  # (B, C, T, H, W)
+            # áp dụng Conv1d dọc trục temporal: đổi về (B*H*W, C, T)
             B, C, T, H, W = y.shape
-            # hợp nhất không gian vào batch để Conv1d nhận input 3D: (B*H*W, C, T)
             y = y.permute(0, 3, 4, 1, 2).contiguous().view(B * H * W, C, T)
-            y = self.temporal_conv(y)  # (B*H*W, C, T) (groups= C nếu depthwise)
-            # trả về shape ban đầu (B, C, T, H, W)
-            y = y.view(B, H, W, C, -1).permute(0, 3, 4, 1, 2).contiguous()
-            return self.fc_norm((x.mean(1))), self.fc_norm2(x+y)
-
-            # return self.fc_norm((x.mean(1))), self.fc_norm(x)
+            y = self.temporal_conv(y)  # (B*H*W, C, T2)
+            T2 = y.size(-1)
+            # trả về (B, C, T2, H, W)
+            y = y.view(B, H, W, C, T2).permute(0, 3, 4, 1, 2).contiguous()
+            # flatten về (B, C, H, W) để cộng với x (x có shape (B, N, C))
+            feat_map = y.mean(dim=2)  # (B, C, H, W)
+            return feat_map
+             # return self.fc_norm((x.mean(1))), self.fc_norm(x)
 
         else:
             return self.norm(x[:, 0])
 
     def forward(self, x):
-        # print(x.shape)  #torch.Size([85, 3, 16, 224, 224])
-        x, y= self.forward_features(x)
-        return x, y
+        # trả về trực tiếp feature map 4D (B, C, H, W)
+        return self.forward_features(x)
 
-class QuickGELU(nn.Module):
-    def forward(self, x: torch.Tensor):
-        return x * torch.sigmoid(1.702 * x)
+# Add model factory functions expected by utils.py
 
 @register_model
-def vit_small_patch16_112(pretrained=False, **kwargs):
+def vit_base_patch16_224(pretrained=False, **kwargs):
+    """
+    Minimal factory returning a VisionTransformer variant compatible with older code.
+    Adjust embed_dim/depth/num_heads if you need exact original weights.
+    """
     model = VisionTransformer(
-        patch_size=16,
-        embed_dim=384,
-        pretrained=False,
-        img_size=112, #112*112
-        depth=12,
-        num_heads=6,
-        mlp_ratio=4,
-        qkv_bias=True,
-        qk_scale=None,
-        drop_rate=0.0,
-        num_classes=400,
-        all_frames=16,
-        tubelet_size=2,
-        drop_path_rate=0.1,
-        attn_drop_rate=0.0,
-        head_drop_rate=0.0,
-        drop_block_rate=None,
-        use_mean_pooling=True,
-        init_scale=0.001,
-        with_cp=False,
-        norm_layer=partial(nn.LayerNorm, eps=1e-6))
-    model.default_cfg = _cfg()
-    # model.requires_grad_(False) 
-    return model
-
-def vit_small_patch16_224(pretrained=False, **kwargs):
-    model = VisionTransformer(
-        patch_size=16,
-        embed_dim=384,
-        pretrained=False,
-        img_size=224, #224*224
-        depth=12,
-        num_heads=6,
-        mlp_ratio=4,
-        qkv_bias=True,
-        qk_scale=None,
-        drop_rate=0.0,
-        num_classes=400,
-        all_frames=16,
-        tubelet_size=2,
-        drop_path_rate=0.1,
-        attn_drop_rate=0.0,
-        head_drop_rate=0.0,
-        drop_block_rate=None,
-        use_mean_pooling=True,
-        init_scale=0.001,
-        with_cp=False,
-        norm_layer=partial(nn.LayerNorm, eps=1e-6))
-    model.default_cfg = _cfg()
-    # model.requires_grad_(False) 
-    return model
-
-@register_model
-def vit_base_patch16_224(pretrained=False):
-    model = VisionTransformer(
-        patch_size=16,
-        pretrained=False,
         img_size=224,
-        embed_dim=768,
+        patch_size=16,
+        embed_dim=384,
         depth=12,
-        num_heads=12,
-        mlp_ratio=4,
-        qkv_bias=True,
-        qk_scale=None,
+        num_heads=6,
+        mlp_ratio=4.0,
+        qkv_bias=False,
         drop_rate=0.0,
-        num_classes=400,
+        attn_drop_rate=0.0,
+        drop_path_rate=0.0,
+        init_values=0.0,
+        use_learnable_pos_emb=False,
         all_frames=16,
         tubelet_size=2,
-        drop_path_rate=0.1,
-        attn_drop_rate=0.0,
-        head_drop_rate=0.0,
-        drop_block_rate=None,
         use_mean_pooling=True,
-        init_scale=0.001,
-        with_cp=False,
-        norm_layer=partial(nn.LayerNorm, eps=1e-6)
-        )
-    model.default_cfg = _cfg()
-    # model.requires_grad_(False)
+        **kwargs
+    )
+    if pretrained:
+        # placeholder: user may load weights here
+        pass
     return model
 
-@register_model
-def vit_giant_patch14_224(pretrained=False):
-    model = VisionTransformer(
-        patch_size=14,
-        embed_dim=1408,
-        depth=40,
-        num_heads=16,
-        mlp_ratio=48 / 11,
-        qkv_bias=True,
-        qk_scale=None,
-        drop_rate=0.0,
-        num_classes=400,
-        all_frames=16,
-        tubelet_size=2,
-        drop_path_rate=0.1,
-        attn_drop_rate=0.0,
-        head_drop_rate=0.0,
-        drop_block_rate=None,
-        use_mean_pooling=True,
-        init_scale=0.001,
-        with_cp=False,
-        norm_layer=partial(nn.LayerNorm, eps=1e-6))
-    model.default_cfg = _cfg()
-    return model
 
 @register_model
 def vit_large_patch16_224(pretrained=False, **kwargs):
     model = VisionTransformer(
+        img_size=224,
         patch_size=16,
-        embed_dim=1024,
+        embed_dim=512,
         depth=24,
-        num_heads=16,
-        mlp_ratio=4,
-        qkv_bias=True,
-        norm_layer=partial(nn.LayerNorm, eps=1e-6),
-        **kwargs)
-    model.default_cfg = _cfg()
+        num_heads=8,
+        mlp_ratio=4.0,
+        **kwargs
+    )
     return model
 
 
 @register_model
-def vit_huge_patch16_224(pretrained=False, **kwargs):
+def vit_giant_patch14_224(pretrained=False, **kwargs):
     model = VisionTransformer(
-        patch_size=16,
-        embed_dim=1280,
+        img_size=224,
+        patch_size=14,
+        embed_dim=768,
         depth=32,
-        num_heads=16,
-        mlp_ratio=4,
-        qkv_bias=True,
-        norm_layer=partial(nn.LayerNorm, eps=1e-6),
-        **kwargs)
-    model.default_cfg = _cfg()
+        num_heads=12,
+        mlp_ratio=4.0,
+        **kwargs
+    )
     return model
+
+@register_model
+def vit_small_patch16_112(pretrained=False, img_size=112, **kwargs):
+    """Small variant for 112x112 input (wrapper)."""
+    return VisionTransformer(
+        img_size=img_size,
+        patch_size=16,
+        embed_dim=384,
+        depth=12,
+        num_heads=6,
+        mlp_ratio=4.0,
+        all_frames=16,
+        tubelet_size=2,
+        use_mean_pooling=True,
+        **kwargs
+    )
+
+@register_model
+def vit_base_patch16_112(pretrained=False, img_size=112, **kwargs):
+    """Base variant for 112x112 input (wrapper)."""
+    return VisionTransformer(
+        img_size=img_size,
+        patch_size=16,
+        embed_dim=384,
+        depth=12,
+        num_heads=6,
+        mlp_ratio=4.0,
+        all_frames=16,
+        tubelet_size=2,
+        use_mean_pooling=True,
+        **kwargs
+    )
+
+@register_model
+def vit_small_patch16_224(pretrained=False, img_size=224, **kwargs):
+    """Small variant for 224x224 input (wrapper)."""
+    return VisionTransformer(
+        img_size=img_size,
+        patch_size=16,
+        embed_dim=384,
+        depth=12,
+        num_heads=6,
+        mlp_ratio=4.0,
+        all_frames=16,
+        tubelet_size=2,
+        use_mean_pooling=True,
+        **kwargs
+    )
+
+# ensure attribute exists for imports
+vit_small_patch16_224 = vit_small_patch16_224

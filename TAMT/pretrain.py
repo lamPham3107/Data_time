@@ -198,10 +198,12 @@ if __name__ == '__main__':
 
     model = model.cuda()
 
-    params.checkpoint_dir = './checkpoints/%s/%s_%s' % (params.dataset, params.model, params.method)
-    params.checkpoint_dir += '_pretrain'
-    params.checkpoint_dir += params.extra_dir
-
+    # sửa cho Kaggle
+    if params.extra_dir:
+        params.checkpoint_dir = params.extra_dir
+    else:
+        params.checkpoint_dir = '/kaggle/working/checkpoints/%s/%s_%s_pretrain' % (params.dataset, params.model, params.method)
+    
     if not os.path.isdir(params.checkpoint_dir):
         os.makedirs(params.checkpoint_dir)
     print(params)

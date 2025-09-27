@@ -364,7 +364,21 @@ class SimpleDataset:
 
     def __getitem__(self, i):
         image_path = os.path.join(self.data[i])
-        img = Image.open(image_path).convert('RGB')
+        ext = os.path.splitext(image_path)[1].lower()
+        if ext in ('.mp4', '.avi', '.mov', '.mkv'):
+            # đọc video bằng decord và lấy các frame mẫu (chỉnh num_segments nếu cần)
+            from decord import VideoReader, cpu
+            vr = VideoReader(image_path, ctx=cpu(0))
+            T = len(vr)
+            # số frame muốn lấy (nếu dataset có attribute num_segments/n_frames, dùng nó)
+            num_req = getattr(self, 'num_segments', getattr(self, 'num_frames', 16))
+            # lấy chỉ số đều nhau
+            idx = np.linspace(0, max(0, T-1), num_req, dtype=int)
+            frames = vr.get_batch(idx).asnumpy()  # (num_req, H, W, 3)
+            # chuyển từng frame sang PIL Image để tận dụng transforms hiện có
+            img = [Image.fromarray(f) for f in frames]
+        else:
+            img = Image.open(image_path).convert('RGB')
         img = self.transform(img)
         target = self.target_transform(self.label[i] - min(self.label))
         return img, target
@@ -457,11 +471,43 @@ class SubDataset:
         self.target_transform = target_transform
 
     def __getitem__(self, i):
-        image_path = os.path.join(self.sub_meta[i])
-        img = Image.open(image_path).convert('RGB')
-        img = self.transform(img)
+        path = os.path.join(self.sub_meta[i])
+        ext = os.path.splitext(path)[1].lower()
+        num_segments = getattr(self, 'num_segments', getattr(self, 'num_frames', 16))
+        frames_list = []
+        if ext in ('.mp4', '.avi', '.mov', '.mkv', '.webm'):
+            try:
+                from decord import VideoReader, cpu
+                vr = VideoReader(path, ctx=cpu(0))
+                total = len(vr)
+                idx = np.linspace(0, max(0, total - 1), num_segments, dtype=int)
+                np_frames = vr.get_batch(idx).asnumpy()  # (T,H,W,3)
+                for f in np_frames:
+                    frames_list.append(Image.fromarray(f).convert('RGB'))
+            except Exception:
+                import cv2
+                cap = cv2.VideoCapture(path)
+                total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 1
+                idx = np.linspace(0, max(0, total - 1), num_segments, dtype=int)
+                for frame_idx in idx:
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, int(frame_idx))
+                    ret, f = cap.read()
+                    if not ret:
+                        h = w = getattr(self, 'image_size', 224)
+                        f = np.zeros((h, w, 3), dtype=np.uint8)
+                    else:
+                        f = f[:, :, ::-1]  # BGR->RGB
+                    frames_list.append(Image.fromarray(f).convert('RGB'))
+                cap.release()
+        else:
+            img = Image.open(path).convert('RGB')
+            for _ in range(num_segments):
+                frames_list.append(img.copy())
+
+        proc = [self.transform(f) for f in frames_list]  # each -> Tensor (C,H,W)
+        clip = torch.stack(proc, dim=0).permute(1, 0, 2, 3).contiguous()  # (C, T, H, W)
         target = self.target_transform(self.cl)
-        return img, target
+        return clip, target
 
     def __len__(self):
         return len(self.sub_meta)

@@ -1,8 +1,8 @@
-gpuid= -1
+gpuid= 0
 N_SHOT=5
-DATA_ROOT=filelist/hmdb51-molo
-MODEL_PATH=/hd1/wyl/model/112112vit-s-140epoch.pt     # PATH of your Pretrained MODEL
-YOURPATH=G:\TLU\BigData\Data_time\TAMT\checkpoints\hmdb51  # PATH of your CKPT, e.g., Mine: /home/wyll/TAMT/checkpoints/hmdb51/VideoMAES_meta_deepbdc_5way_5shot_2TAA
+DATA_ROOT=/kaggle/input/tamt-bigdata/TAMT/filelist/hmdb51-molo
+MODEL_PATH=/kaggle/working/checkpoints/hmdb51/best_model.tar    # PATH of your Pretrained MODEL
+YOURPATH=/kaggle/working/checkpoints/hmdb51  # PATH of your CKPT, e.g., Mine: /home/wyll/TAMT/checkpoints/hmdb51/VideoMAES_meta_deepbdc_5way_5shot_2TAA
 cd ../../../
 
 
