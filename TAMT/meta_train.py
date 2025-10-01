@@ -7,6 +7,8 @@ import torch.optim.lr_scheduler as lr_scheduler
 import time
 import os
 import glob
+import random
+import string
 
 from data.datamgr import SetDataManager
 
@@ -74,6 +76,13 @@ def train(params, base_loader, val_loader, model, stop_epoch):
         print("model best acc is {:.2f}, best acc epoch is {}".format(trlog['max_acc'], trlog['max_acc_epoch']))
 
     return model
+
+
+def get_unique_model_name():
+    """Generate unique model name to avoid registration conflicts"""
+    worker_id = os.getpid()  # Process ID
+    random_suffix = ''.join(random.choices(string.ascii_lowercase, k=4))
+    return f"model_{worker_id}_{random_suffix}"
 
 
 if __name__ == '__main__':
@@ -197,4 +206,6 @@ if __name__ == '__main__':
     if not os.path.isdir(params.checkpoint_dir):
         os.makedirs(params.checkpoint_dir)
     print(params)
+    unique_name = get_unique_model_name()
+    os.environ['MODEL_UNIQUE_NAME'] = unique_name
     model = train(params, base_loader, val_loader, model, params.epoch)

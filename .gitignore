@@ -78,3 +78,4 @@ TAMT/checkpoints/hmdb51/pretrain.pt
 TAMT.zip
 TAMT/data_down
 data_down.zip
+TAMT/checkpoints/hmdb51/best_model.tar

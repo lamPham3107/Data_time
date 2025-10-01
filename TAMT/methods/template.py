@@ -308,21 +308,56 @@ class MetaTemplate(nn.Module):
         out = self.feature.forward(x)
         return out
 
-    def parse_feature(self, x, is_feature):
-        # Di chuyển input lên GPU bằng .cuda()
+    def parse_feature(self, x, is_feature, return_bias=False):
+        """
+        Parse features with optional bias return
+        Args:
+            x: input tensor
+            is_feature: whether input is already features
+            return_bias: whether to return bias components
+        Returns:
+            If return_bias=False: z_support, z_query (backward compatible)
+            If return_bias=True: z_support, z_query, b_support, b_query
+        """
         x = Variable(x.cuda())
-
         _, _, _, _, _, image_size = x.shape
+
         if is_feature:
+            # Nếu đầu vào đã là feature sẵn
             z_all = x
+            bias_all = None
         else:
-            x = x.contiguous().view(self.n_way * (self.n_support + self.n_query), *x.size()[2:])  # torch.Size([85, 3, 16, 224, 224])
-            z_all, _ = self.feature.forward(x)
-            z_all = z_all.view(self.n_way, self.n_support + self.n_query, -1)
+            x = x.contiguous().view(
+                self.n_way * (self.n_support + self.n_query), *x.size()[2:]
+            )
+
+            # Handle different model forward outputs
+            feature_output = self.feature.forward(x)
+            
+            if isinstance(feature_output, tuple) and len(feature_output) == 2:
+                # Model returns (weight, bias)
+                weight, bias = feature_output
+                z_all = weight.view(self.n_way, self.n_support + self.n_query, -1)
+                bias_all = bias.view(self.n_way, self.n_support + self.n_query, -1)
+            else:
+                # Model returns single tensor
+                if isinstance(feature_output, tuple):
+                    z_all = feature_output[0]
+                else:
+                    z_all = feature_output
+                z_all = z_all.view(self.n_way, self.n_support + self.n_query, -1)
+                bias_all = None
 
         z_support = z_all[:, :self.n_support]
         z_query = z_all[:, self.n_support:]
-        return z_support, z_query
+
+        if return_bias or bias_all is not None:
+            b_support = bias_all[:, :self.n_support] if bias_all is not None else None
+            b_query = bias_all[:, self.n_support:] if bias_all is not None else None
+            return z_support, z_query, b_support, b_query
+        else:
+            # Backward compatible - only return 2 values
+            return z_support, z_query
 
     def correct(self, x):
         scores = self.set_forward(x)

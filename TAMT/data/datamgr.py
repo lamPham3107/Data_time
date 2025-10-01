@@ -4,9 +4,14 @@ import torch
 from PIL import Image
 import numpy as np
 import torchvision.transforms as transforms
-from data.dataset import SetDataset_JSON, SimpleDataset, SetDataset, EpisodicBatchSampler, SimpleDataset_JSON
+# FIX: Thêm try-except cho import
+try:
+    from data.dataset import SetDataset_JSON, SimpleDataset, SetDataset, EpisodicBatchSampler, SimpleDataset_JSON
+except ImportError:
+    from .dataset import SetDataset_JSON, SimpleDataset, SetDataset, EpisodicBatchSampler, SimpleDataset_JSON
 from abc import abstractmethod
 import os
+
 
 
 class TransformLoader:
