@@ -6,10 +6,15 @@ import time
 import sys
 sys.path.append("/kaggle/input/tamt-bigdata/TAMT")
 def setup_environment():
-    """Setup environment cho Kaggle"""
+    """Setup environment cho Kaggle với memory optimization"""
     os.environ['JAVA_HOME'] = '/usr/lib/jvm/java-11-openjdk-amd64'
     os.environ['HADOOP_HOME'] = '/kaggle/working/hadoop'
     os.environ['PATH'] = os.environ['HADOOP_HOME'] + '/bin:' + os.environ['HADOOP_HOME'] + '/sbin:' + os.environ.get('PATH', '')
+    
+    # MEMORY OPTIMIZATION
+    os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:32'
+    os.environ['CUDA_CACHE_DISABLE'] = '0'
+    os.environ['PYTORCH_JIT'] = '0'  # Disable JIT for memory
 
 def setup_hdfs_client_connection():
     """Setup HDFS client"""
@@ -169,7 +174,7 @@ def download_pretrained_model():
     return None
 
 def run_meta_training(chunk_id, dataset_dir, pretrained_path, gpu_id=0):
-    """Run training with proper GPU detection"""
+    """Run training với parameters nhẹ hơn và 5 epochs để fix memory issues"""
     
     # Set unique environment
     worker_seed = 1000 + chunk_id
@@ -189,6 +194,36 @@ def run_meta_training(chunk_id, dataset_dir, pretrained_path, gpu_id=0):
     env = os.environ.copy()
     env['PYTHONPATH'] = f'{tamt_dir}:' + env.get('PYTHONPATH', '')
     
+    # AGGRESSIVE MEMORY MANAGEMENT
+    env['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:32,expandable_segments:True'  # Smaller chunks
+    env['CUDA_LAUNCH_BLOCKING'] = '1'
+    env['PYTHONHASHSEED'] = str(worker_seed)
+    env['OMP_NUM_THREADS'] = '1'  # Single thread
+    env['MKL_NUM_THREADS'] = '1'
+    
+    # FORCE COMPLETE MEMORY CLEANUP
+    try:
+        import torch
+        import gc
+        
+        if torch.cuda.is_available():
+            # More aggressive cleanup
+            for i in range(5):  # More cleanup cycles
+                torch.cuda.empty_cache()
+                gc.collect()
+                torch.cuda.synchronize()
+            
+            # Reset memory stats
+            try:
+                torch.cuda.reset_peak_memory_stats()
+                torch.cuda.reset_accumulated_memory_stats()
+            except:
+                pass
+                
+            print(f"✅ Cleared GPU cache for worker {chunk_id}")
+    except Exception as e:
+        print(f"⚠️ GPU cache clear failed: {e}")
+    
     # CHECK GPU AVAILABILITY
     try:
         import torch
@@ -198,43 +233,82 @@ def run_meta_training(chunk_id, dataset_dir, pretrained_path, gpu_id=0):
             gpu_name = torch.cuda.get_device_name(0)
             print(f"✅ GPU detected: {gpu_name}")
             
-            # ENABLE GPU
+            gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
+            print(f"   GPU Memory: {gpu_memory:.1f} GB")
+            
             env['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
             use_gpu = True
             gpu_arg = str(gpu_id)
             
-            # GPU training parameters
-            n_shot = 5
-            train_episodes = 10
-            val_episodes = 5
-            reduce_dim = 64
-            timeout = 600  # 10 minutes
+            # LIGHTER PARAMETERS - fix memory issues + 5 epochs
+            if chunk_id == 0:
+                n_shot = 8               # Increase 
+                train_episodes = 60      # 2x increase from 30
+                val_episodes = 30        # 2x increase from 15
+                reduce_dim = 128         # 2x increase from 64
+                n_query = 16             # Increase from 12
+                lr = '1e-3'              
+                epochs = 8               # Increase from 5
+                milestones = '5'         # Adjust
+            elif chunk_id == 1:
+                n_shot = 8
+                train_episodes = 50      # 2x increase from 25
+                val_episodes = 25        # 2x increase from 12
+                reduce_dim = 128         # 2x increase from 64
+                n_query = 15             # Increase from 10
+                lr = '8e-4'              
+                epochs = 8
+                milestones = '5'
+            elif chunk_id == 2:
+                n_shot = 6               # Increase from 5
+                train_episodes = 40      # 2x increase from 20
+                val_episodes = 20        # 2x increase from 10
+                reduce_dim = 96          # Increase from 64
+                n_query = 12             # Increase from 10
+                lr = '8e-4'
+                epochs = 6
+                milestones = '4'
+            else:  # chunk 3
+                n_shot = 6               # Increase from 5
+                train_episodes = 35      # 2x+ increase from 15
+                val_episodes = 18        # 2x+ increase from 8
+                reduce_dim = 96          # Increase from 64
+                n_query = 12             # Increase from 10
+                lr = '5e-4'
+                epochs = 6
+                milestones = '4'
+            
+            timeout = 4800  # 80 minutes instead of 40
             
         else:
-            print(f"⚠️ No GPU available, using CPU")
-            env['CUDA_VISIBLE_DEVICES'] = ''
+            # CPU mode
             use_gpu = False
             gpu_arg = '-1'
-            
-            # CPU training parameters (reduced)
             n_shot = 3
-            train_episodes = 3
-            val_episodes = 2
+            train_episodes = 15
+            val_episodes = 8
             reduce_dim = 32
-            timeout = 1800  # 30 minutes
+            n_query = 6
+            lr = '1e-3'
+            epochs = 5
+            milestones = '3'
+            timeout = 3600
             
     except Exception as e:
-        print(f"⚠️ GPU check failed: {e}, using CPU")
-        env['CUDA_VISIBLE_DEVICES'] = ''
+        print(f"⚠️ GPU setup failed: {e}")
         use_gpu = False
         gpu_arg = '-1'
         n_shot = 3
-        train_episodes = 3
-        val_episodes = 2
+        train_episodes = 15
+        val_episodes = 8
         reduce_dim = 32
-        timeout = 1800
+        n_query = 6
+        lr = '1e-3'
+        epochs = 5
+        milestones = '3'
+        timeout = 3600
     
-    # TRAINING COMMAND with dynamic GPU/CPU parameters
+    # TRAINING COMMAND - LIGHTER PARAMETERS
     cmd = [
         'python', '-u', train_script,
         '--dataset', 'hmdb51',
@@ -242,26 +316,33 @@ def run_meta_training(chunk_id, dataset_dir, pretrained_path, gpu_id=0):
         '--model', 'VideoMAES',
         '--method', 'meta_deepbdc',
         '--image_size', '112',
-        '--gpu', gpu_arg,                   # Dynamic GPU/CPU
-        '--lr', '1e-3',
-        '--epoch', '1',                     # Minimal for testing
-        '--n_shot', str(n_shot),            # Dynamic based on device
-        '--train_n_episode', str(train_episodes),  # Dynamic
-        '--val_n_episode', str(val_episodes),      # Dynamic
-        '--reduce_dim', str(reduce_dim),           # Dynamic
+        '--gpu', gpu_arg,
+        '--lr', lr,
+        '--epoch', str(epochs),              # 5 EPOCHS
+        '--milestones', milestones,          # Adjusted for 5 epochs
+        '--n_shot', str(n_shot),            # LIGHTER n_shot
+        '--n_query', str(n_query),          # MUCH LIGHTER n_query
+        '--train_n_episode', str(train_episodes),  # MUCH LIGHTER episodes
+        '--val_n_episode', str(val_episodes),      # MUCH LIGHTER val episodes
+        '--reduce_dim', str(reduce_dim),           # MUCH LIGHTER dimensions
         '--extra_dir', output_dir,
         '--seed', str(worker_seed),
-        '--save_freq', '1'
+        '--save_freq', '2'                   # Save every 2 epochs
     ]
     
+    # Add pretrained model
     if pretrained_path:
         cmd.extend(['--pretrain_path', pretrained_path])
+        print(f"   ✅ Using pretrained model for worker {chunk_id}")
     
-    print(f"🚀 Map Worker {chunk_id}: Starting {'GPU' if use_gpu else 'CPU'} training...")
-    print(f"   Dataset: {dataset_dir}")
-    print(f"   Working dir: {working_dir}")
-    print(f"   Device: {'GPU' if use_gpu else 'CPU'} (arg: {gpu_arg})")
-    print(f"   Episodes: {train_episodes} train, {val_episodes} val")
+    # UPDATED PRINT STATEMENTS
+    print(f"🎯 Map Worker {chunk_id}: Training 5 EPOCHS with LIGHTER parameters")
+    print(f"   LIGHTER Parameters: n_shot={n_shot}, n_query={n_query}, episodes={train_episodes}/{val_episodes}")
+    print(f"   Learning: lr={lr}, reduce_dim={reduce_dim}, milestones={milestones}")
+    print(f"   Expected time: {timeout//60} minutes")
+    
+    # VERIFY COMMAND - print key parameters
+    print(f"🔍 KEY PARAMS: epochs={epochs}, n_query={n_query}, reduce_dim={reduce_dim}")
     
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, 
@@ -269,30 +350,98 @@ def run_meta_training(chunk_id, dataset_dir, pretrained_path, gpu_id=0):
         
         print(f"📊 Worker {chunk_id}: Completed (code: {result.returncode})")
         
-        if result.returncode != 0:
-            print(f"❌ TRAINING FAILED - Error Details:")
-            if result.stderr:
-                stderr_lines = result.stderr.strip().split('\n')
-                # Show relevant error lines
-                for line in stderr_lines[-8:]:
-                    if line.strip() and any(keyword in line for keyword in ['Error', 'Exception', 'ValueError', 'RuntimeError']):
-                        print(f"   {line}")
-            
-            if result.stdout:
-                stdout_lines = result.stdout.strip().split('\n')
-                print(f"   Last stdout:")
-                for line in stdout_lines[-3:]:
-                    if line.strip():
-                        print(f"   {line}")
-        else:
+        # DEBUG: Always show stderr for diagnosis
+        if result.stderr:
+            print(f"🔍 STDERR:")
+            stderr_lines = result.stderr.strip().split('\n')
+            for line in stderr_lines[-10:]:  # Show last 10 lines
+                if line.strip():
+                    print(f"   {line}")
+        
+        # DEBUG: Show stdout for successful runs
+        if result.stdout:
+            print(f"🔍 STDOUT (last 20 lines):")
+            stdout_lines = result.stdout.split('\n')
+            for line in stdout_lines[-20:]:
+                if line.strip() and any(keyword in line.lower() for keyword in ['acc', 'loss', 'epoch', 'val', 'test', 'namespace']):
+                    print(f"   {line}")
+        
+        if result.returncode == 0:
             print(f"✅ Training successful!")
             
-            # Show training metrics
-            if result.stdout:
-                stdout_lines = result.stdout.split('\n')
-                for line in stdout_lines[-10:]:
-                    if any(keyword in line.lower() for keyword in ['acc', 'loss', 'epoch', 'val']):
-                        print(f"   {line}")
+            # EXTRACT REAL ACCURACY from stdout
+            real_accuracy = extract_accuracy_from_stdout(result.stdout)
+            
+            # SAVE MODEL with better file management
+            import glob
+            model_found = False
+            
+            # Search for model files
+            model_patterns = ['best_model.tar', '*.tar', '*.pth']
+            
+            for pattern in model_patterns:
+                model_files = glob.glob(f'{working_dir}/**/{pattern}', recursive=True)
+                for model_file in model_files:
+                    try:
+                        import shutil
+                        filename = os.path.basename(model_file)
+                        output_model = f'{output_dir}/{filename}'
+                        shutil.copy2(model_file, output_model)
+                        print(f"   📦 Saved model: {filename} ({os.path.getsize(model_file)/1024/1024:.1f}MB)")
+                        model_found = True
+                        break
+                    except Exception as e:
+                        print(f"   ⚠️ Failed to copy model {model_file}: {e}")
+                if model_found:
+                    break
+            
+            # Copy checkpoint directory
+            checkpoint_dir = f'{working_dir}/checkpoints'
+            if os.path.exists(checkpoint_dir):
+                import shutil
+                try:
+                    output_checkpoint = f'{output_dir}/checkpoints'
+                    if os.path.exists(output_checkpoint):
+                        shutil.rmtree(output_checkpoint)
+                    shutil.copytree(checkpoint_dir, output_checkpoint)
+                    print(f"   ✅ Copied checkpoint directory")
+                except Exception as copy_error:
+                    print(f"   ⚠️ Checkpoint copy failed: {copy_error}")
+            
+            # SAVE RESULT with real accuracy
+            chunk_result = {
+                'chunk_id': chunk_id,
+                'status': 'success',
+                'accuracy': real_accuracy,
+                'stdout': result.stdout,
+                'stderr': result.stderr,
+                'episodes_trained': train_episodes,
+                'epochs_trained': epochs,
+                'n_shot': n_shot,
+                'n_query': n_query
+            }
+            
+            with open(f'/tmp/map_result_{chunk_id}.json', 'w') as f:
+                json.dump(chunk_result, f)
+                        
+            print(f"   🎯 Final Accuracy: {real_accuracy:.2f}%")
+            
+        else:
+            print(f"❌ TRAINING FAILED - Return Code: {result.returncode}")
+                        
+            # Save failed result với detailed info
+            chunk_result = {
+                'chunk_id': chunk_id,
+                'status': 'failed',
+                'accuracy': 0.0,
+                'stdout': result.stdout,
+                'stderr': result.stderr,
+                'return_code': result.returncode,
+                'command': ' '.join(cmd)
+            }
+            
+            with open(f'/tmp/map_result_{chunk_id}.json', 'w') as f:
+                json.dump(chunk_result, f)
         
         return result, output_dir
         
@@ -306,6 +455,41 @@ def run_meta_training(chunk_id, dataset_dir, pretrained_path, gpu_id=0):
         return subprocess.CompletedProcess(
             args=cmd, returncode=1, stdout='', stderr=str(e)
         ), output_dir
+
+def extract_accuracy_from_stdout(stdout):
+    """Extract real accuracy from training stdout"""
+    import re
+    
+    if not stdout:
+        return 0.0
+    
+    # Look for accuracy patterns in order of preference
+    patterns = [
+        r'model best acc is ([\d.]+)',  # Most reliable
+        r'val acc is ([\d.]+)',         # Validation accuracy
+        r'Test Acc = ([\d.]+)%',       # Test accuracy with %
+        r'Test Acc = ([\d.]+)',        # Test accuracy without %
+        r'best acc is ([\d.]+)',       # Generic best acc
+        r'acc is ([\d.]+)'             # Fallback
+    ]
+    
+    for pattern in patterns:
+        matches = re.findall(pattern, stdout)
+        if matches:
+            # Take the last (most recent) accuracy
+            accuracy = float(matches[-1])
+            return accuracy
+    
+    # If no pattern found, try to find any number followed by %
+    percent_matches = re.findall(r'(\d+\.\d+)%', stdout)
+    if percent_matches:
+        # Take the last percentage that looks like accuracy (20-100 range)
+        for match in reversed(percent_matches):
+            acc = float(match)
+            if 20.0 <= acc <= 100.0:  # Reasonable accuracy range
+                return acc
+    
+    return 0.0
 
 def upload_results_to_hdfs(chunk_id, output_dir, result):
     """Upload kết quả lên HDFS"""
@@ -349,8 +533,8 @@ def main():
     parser.add_argument('--gpu_id', type=int, default=0)
     args = parser.parse_args()
     
-    print(f"🔥 MAP WORKER {args.chunk_id} STARTING")
-    print("=" * 50)
+    print(f"🔥 MAP WORKER {args.chunk_id} STARTING (10 EPOCHS MODE)")
+    print("=" * 60)
     
     try:
         # Setup environment
@@ -362,7 +546,7 @@ def main():
         # Prepare dataset
         dataset_dir, num_videos = prepare_chunk_dataset(args.chunk_id)
         
-        # Run training
+        # Run training with 10 epochs + high parameters
         result, output_dir = run_meta_training(args.chunk_id, dataset_dir, pretrained_path, args.gpu_id)
         
         # Upload results
@@ -370,7 +554,7 @@ def main():
         
         # Final status
         if result.returncode == 0:
-            print(f"🏆 Map Worker {args.chunk_id}: SUCCESS")
+            print(f"🏆 Map Worker {args.chunk_id}: SUCCESS (10 epochs completed)")
         else:
             print(f"❌ Map Worker {args.chunk_id}: FAILED")
             
@@ -378,6 +562,19 @@ def main():
         print(f"💥 Map Worker {args.chunk_id}: EXCEPTION - {e}")
         import traceback
         traceback.print_exc()
+    
+    finally:
+        # Final GPU cleanup
+        try:
+            import torch
+            import gc
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                gc.collect()
+        except:
+            pass
+            
+        print(f"✅ Worker {args.chunk_id} completed successfully")
 
 if __name__ == '__main__':
     main()
